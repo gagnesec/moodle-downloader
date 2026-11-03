@@ -1,0 +1,18 @@
+{
+  "name": "course-files-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-native Moodle File and Folder downloader. No runtime dependencies.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

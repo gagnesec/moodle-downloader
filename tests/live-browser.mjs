@@ -1,0 +1,106 @@
+// Opt-in real-school integration check. No fake HTTP server or response interception.
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+assert.ok(await fs.stat(path.join(project,'extension/manifest.json')).catch(()=>null),'The actual extension package is not implemented');
+if(!process.argv.includes('--live')) throw new Error('Live Moodle requests require the explicit --live flag.');
+const configPath=process.env.MOODLE_CONFIG;
+if(!configPath)throw new Error('Set MOODLE_CONFIG to an existing authorized Moodle-DL config. Never put a token in command arguments.');
+const config=JSON.parse((await fs.readFile(configPath,'utf8')).replace(/^\uFEFF/,''));
+const base=('https://'+config.moodle_domain+'/'+config.moodle_path.replace(/^\/+|\/+$/g,'')).replace(/\/+$/,'');
+const origin=new URL(base).origin;
+const scratch=process.env.TEST_OUTPUT;
+if(!scratch)throw new Error('Set TEST_OUTPUT to an isolated private test folder.');
+await fs.mkdir(scratch,{recursive:true});
+const extension=path.join(scratch,'loaded-extension');
+await fs.cp(path.join(project,'extension'),extension,{recursive:true});
+const manifest=JSON.parse(await fs.readFile(path.join(extension,'manifest.json'),'utf8'));
+manifest.host_permissions=[origin+'/*']; // Test-only pre-grant; no production source changes.
+await fs.writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
+const context=await chromium.launchPersistentContext(path.join(scratch,'profile-'+Date.now()),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
+try{
+ const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
+ const id=new URL(worker.url()).host;
+ const page=await context.newPage();
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(`chrome-extension://${id}/app.html`);
+ const moodlePage=await context.newPage();
+ const moodleResponse=await moodlePage.goto(base+'/',{waitUntil:'domcontentloaded',timeout:45000});
+ await moodlePage.waitForFunction(()=>Boolean(globalThis.M?.cfg?.wwwroot)||Boolean(document.body?.innerText.trim()),{},{timeout:8000}).catch(()=>{});
+ const detection=await page.evaluate(async origin=>{
+   const {detectSite}=await import('./detect.js');
+   const tabs=await chrome.tabs.query({url:origin+'/*'});
+   for(const tab of tabs){const site=await detectSite(tab);if(site)return {site,tabUrl:tab.url};}
+   return null;
+ },origin);
+ const detectionEvidence=await moodlePage.evaluate(()=>({origin:location.origin,path:location.pathname,title:document.title,moodleRoot:globalThis.M?.cfg?.wwwroot??null,bodyPreview:document.body?.innerText.slice(0,300),htmlLength:document.documentElement.outerHTML.length,contentType:document.contentType}));
+ detectionEvidence.status=moodleResponse?.status();
+ await fs.writeFile(path.join(scratch,'detection-evidence.json'),JSON.stringify(detectionEvidence,null,2));
+ assert.equal(detection?.site.base,base,'Auto-detection did not recognize the real Moodle page: '+JSON.stringify(detectionEvidence));
+ await page.evaluate(site=>chrome.storage.session.set({detectedSite:{site,detectedAt:Date.now()}}),detection.site);
+ await page.locator('#detected-target').waitFor({state:'visible'});
+ assert.equal(await page.locator('#site').inputValue(),base);
+ await moodlePage.close();
+ await page.locator('#manual-address').evaluate(el=>{el.open=true;});
+ await page.locator('#site').fill(base);
+ await page.locator('#existing-token').evaluate(el=>{el.open=true;});
+ await page.locator('#token').fill(config.token);
+ await page.locator('#connect-token').click();
+ await page.locator('#account').waitFor({state:'visible',timeout:60000});
+ const biology=page.locator('#course-list label').filter({hasText:'BIOL 202'}).first();
+ assert.equal(await biology.count(),1,'Expected an enrolled course for the live check');
+ await biology.locator('input').check();await page.locator('#scan').click();
+ await page.locator('#file-section').waitFor({state:'visible',timeout:60000});
+ await page.locator('#file-options').evaluate(el=>{el.open=true;});
+ await page.locator('#files-pdf').click();
+ const selectedNames=()=>page.locator('#file-list input:checked').evaluateAll(elements=>elements.map(el=>el.dataset.fileName));
+ const pdfNames=await selectedNames();assert.ok(pdfNames.length);assert.ok(pdfNames.every(name=>/\.pdf$/i.test(name)));
+ await page.locator('#files-slides').click();assert.ok((await selectedNames()).every(name=>/\.(pptx?|odp|key)$/i.test(name)));
+ await page.locator('#files-all').click();assert.equal((await selectedNames()).length,await page.locator('#file-list input').count());
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Connected course/file selection overflows the narrow layout');
+ await page.screenshot({path:path.join(scratch,'live-narrow.png'),fullPage:true});
+ await page.setViewportSize({width:1280,height:900});
+ await page.locator('#files-none').click();
+ assert.equal((await selectedNames()).length,0);
+ const candidates=await page.locator('input[data-file-name]').evaluateAll(elements=>elements.map(el=>({name:el.dataset.fileName,size:Number(el.dataset.size)})).filter(f=>f.name.toLowerCase().endsWith('.pdf')&&f.size>0&&f.size<1000000).sort((a,b)=>a.size-b.size));
+ assert.ok(candidates.length,'No small native PDF found by the actual extension');
+ const wanted=candidates[0];
+ await page.locator('input[data-file-name]').filter({visible:true}).evaluateAll((elements,name)=>{const e=elements.find(el=>el.dataset.fileName===name);e.checked=true;e.dispatchEvent(new Event('change',{bubbles:true}));},wanted.name);
+ // Real browser FileSystemDirectoryHandle; only the OS picker interaction is substituted.
+ // All school requests, responses, stream writing and saved bytes remain real.
+ await page.evaluate(()=>{window.showDirectoryPicker=()=>new Promise((resolve,reject)=>{window.__cancelPicker=()=>reject(new DOMException('Cancelled','AbortError'));});});
+ await page.locator('#download').click();
+ assert.equal(await page.locator('#file-list input').first().isDisabled(),true,'Selection must be frozen while the native picker is pending');
+ assert.equal(await page.locator('#cancel').isDisabled(),true,'Connection cancellation must not be available during folder selection');
+ await page.evaluate(()=>window.__cancelPicker());
+ await page.waitForFunction(()=>!document.querySelector('#download').disabled);
+ assert.equal(await page.locator('#account').isVisible(),true,'Cancelling the picker must not disconnect Moodle');
+ await page.evaluate(async()=>{const root=await navigator.storage.getDirectory();const dir=await root.getDirectoryHandle('live-download-check',{create:true});window.__testDirectory=dir;window.showDirectoryPicker=async()=>dir;});
+ await page.locator('#download').click();
+ await page.locator('#result').waitFor({state:'visible',timeout:120000});
+ const verification=await page.evaluate(async()=>{
+  const root=window.__testDirectory;
+  const runName=document.querySelector('#result-root').textContent;
+  const run=await root.getDirectoryHandle(runName);
+  const report=JSON.parse(await (await (await run.getFileHandle('_download-report.json')).getFile()).text());
+  const entry=report.files.find(f=>f.status==='saved');
+  if(!entry)return {report};
+  let dir=run;const parts=entry.path.split('/');for(const part of parts.slice(0,-1))dir=await dir.getDirectoryHandle(part);
+  const file=await (await dir.getFileHandle(parts.at(-1))).getFile();const bytes=await file.arrayBuffer();
+  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
+  return {report,savedBytes:file.size,sha256:hash,startsWithPDF:new TextDecoder().decode(bytes.slice(0,5))==='%PDF-'};
+ });
+ assert.equal(verification.report.completed,1,JSON.stringify(verification.report));
+ assert.equal(verification.report.failed,0);assert.equal(verification.savedBytes,wanted.size);assert.equal(verification.startsWithPDF,true);assert.deepEqual(errors,[]);
+ assert.ok(!JSON.stringify(verification).includes(config.token));
+ await page.screenshot({path:path.join(scratch,'live-result.png'),fullPage:true});
+ const saved={...verification,downloadedFile:wanted.name,network:'Real Moodle; no intercepted responses',autoDetection:detection,fileSelectionControlsTested:['PDFs','Slides','All files','None','individual checkbox'],connectedNarrowLayoutNoOverflow:true,normalSSOTested:false,nativePickerConfirmationTested:false,testStorage:'Actual Chrome origin-private filesystem',productionSourceUsed:true};
+ await fs.writeFile(path.join(scratch,'live-result.json'),JSON.stringify(saved,null,2));
+ console.log(JSON.stringify(saved,null,2));
+ await page.locator('#disconnect').click();
+ const session=await page.evaluate(()=>chrome.storage.session.get(null));assert.ok(!session.connection?.token);
+}finally{await context.close();}

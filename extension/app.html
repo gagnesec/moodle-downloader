@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Course Files</title><link rel="stylesheet" href="app.css"><script type="module" src="app.js"></script></head>
+<body>
+<main>
+<header><div class="brand"><h1>Course Files</h1><span class="eyebrow">Unofficial Moodle downloader</span></div><button id="privacy-open" class="quiet">Privacy</button></header>
+<div id="notice" role="alert" hidden></div>
+<section id="connect-section" aria-labelledby="connect-heading">
+ <h2 id="connect-heading">Connect your Moodle</h2>
+ <p id="open-moodle-hint">Open your Moodle course or dashboard, then click the extension icon. Your Moodle address is detected for you.</p>
+ <div id="detected-target" hidden><p id="detected-note" class="hint">Moodle detected</p><strong id="detected-address"></strong><div class="actions"><button id="connect" type="button">Connect Moodle</button></div></div>
+ <p class="hint">Sign in on your school's own page. We never ask for your password or monitor unrelated browsing.</p>
+ <details id="manual-address"><summary>Use a Moodle address manually</summary><form id="connect-form"><label for="site">Moodle website</label><div class="input-row"><input id="site" type="text" inputmode="url" placeholder="https://your-school.example/moodle" autocomplete="url"><button id="connect-address" type="submit">Connect</button></div></form></details>
+ <details id="existing-token"><summary>Connection help: use an existing service token</summary><label for="token">Existing Moodle token, not your password</label><div class="input-row"><input id="token" type="password" autocomplete="off" spellcheck="false" aria-label="Existing Moodle token"><button id="connect-token" class="secondary">Use token</button></div><p class="hint">Only needed if your normal school connection is unavailable. Use the Moodle address shown above or enter it manually.</p></details>
+</section>
+<section id="account" class="account" aria-label="Connected account" hidden><div><strong id="account-name"></strong><p id="account-site"></p></div><button id="disconnect" class="quiet">Disconnect</button></section>
+<div id="workspace" class="workspace" hidden>
+<section id="course-section" aria-labelledby="courses-heading" hidden>
+ <div class="section-heading"><h2 id="courses-heading"><span class="step">1</span> Courses</h2><div class="selection-tools"><button id="courses-all" class="quiet">Select all</button><button id="courses-none" class="quiet">None</button></div></div>
+ <div id="course-list" class="list" role="group" aria-label="Courses to search"></div>
+ <div class="course-actions"><span id="course-count" class="hint" role="status">Select at least one course.</span><button id="scan">Find files</button></div>
+</section>
+<section id="file-empty" class="empty-panel" aria-label="Files"><div><h2>Choose courses to find files</h2><p class="hint">Select one or more courses, then choose <strong>Find files</strong>.</p><p class="hint">Review the files here before choosing a download folder.</p></div></section>
+<section id="file-section" aria-labelledby="files-heading" hidden>
+ <div class="section-heading"><h2 id="files-heading"><span class="step">2</span> Files</h2><p id="file-summary" class="summary" role="status"></p></div>
+ <details id="file-options" open><summary>Choose files</summary><div class="file-tools" role="group" aria-label="Select files by type"><button id="files-all" class="quiet">All files</button><button id="files-pdf" class="quiet">PDFs</button><button id="files-slides" class="quiet">Slides</button><button id="files-none" class="quiet">None</button></div><div id="file-list" class="list files" role="group" aria-label="Files to download"></div></details>
+ <details class="coverage"><summary>What's included</summary><p class="hint">Includes files in Moodle's File and Folder activities. External sites (such as Pearson), embedded page files, submissions, and quiz/lesson content aren't included.</p></details>
+ <ul id="scan-warnings" class="warnings" hidden></ul>
+ <div class="download-actions"><div><strong id="selected-count" role="status"></strong><p class="hint">New organized folder. Existing files stay untouched.</p></div><button id="download">Choose folder &amp; download</button></div>
+</section>
+</div>
+<section id="progress-section" aria-live="polite" hidden><div class="section-heading"><strong id="progress-title">Working…</strong><button id="cancel" class="quiet">Cancel</button></div><progress id="progress" value="0" max="1" aria-label="Operation progress"></progress><p id="progress-detail" class="hint"></p><p class="hint">Keep this tab open while working.</p></section>
+<section id="result" aria-live="polite" hidden><h2 id="result-summary"></h2><p>Saved in <strong id="result-root"></strong></p><p class="hint">A download report is included in that folder.</p><ul id="result-errors" class="warnings"></ul></section>
+<footer>Local and private. Files go directly from Moodle to your folder. No uploads or analytics.</footer>
+</main>
+<dialog id="privacy"><h2>Your data stays with you</h2><p>Course Files contacts only the Moodle website you explicitly connect to. Moodle may redirect its normal sign-in page to your school's identity provider.</p><p>The ordinary Moodle token and course list are kept in Chrome's session storage, not browser sync, and are cleared on disconnect or browser restart. Any private token in Moodle's callback is discarded. We do not collect passwords, analytics, or file contents.</p><p>The website address alone is remembered on this device. Folder access is granted through Chrome's folder chooser. No files are opened or executed automatically. Disconnect removes the connection and attempts to revoke its optional site permission; downloaded files are retained.</p><p>This is unofficial and is not affiliated with Moodle or your institution. School settings may prevent mobile/API access or route login to their own app. If Chrome asks to open another app, choose Cancel.</p><button id="privacy-close">Close</button></dialog>
+</body></html>
