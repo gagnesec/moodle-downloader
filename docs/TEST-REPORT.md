@@ -1,12 +1,39 @@
 # Verification report
 
-## Build status
+## Current verification: November 4, 2026
+
+The saved real-school report was created at `2026-11-04T19:02:47.347Z` (UTC). This request-safety check used production code and genuine Moodle responses, with no response interception or fake Moodle server.
+
+| Check | Observed result |
+| --- | --- |
+| Offline regressions | **52 passed, 0 failed** on Node.js 26.12.1. Includes the policy, adapter, cache, cancellation and earlier regressions. |
+| Static checks | JavaScript syntax, manifest scope, assets and prohibited dynamic-code checks passed. |
+| Actual extension browser check | Loaded in isolated Chromium; privacy, token masking, toolbar relocation/no duplicate tab, narrow layout and refresh control passed. No page errors, school requests or unexpected HTTP requests. |
+| Cross-context request lock | The actual extension page held its production lease while the actual service worker queued on the same Web Lock, acquiring it only after release. No HTTP request or fake server was involved. |
+| Real API/file request budget | **7**: 2 account/course-list APIs, 2 filtered File/Folder scan APIs, 2 explicit refresh APIs and 1 download. The separately opened school homepage and its ordinary assets are excluded. |
+| Real request concurrency | Maximum **1** outstanding API/file request. |
+| Real start pacing | Minimum observed request-event gap **1,995 ms**. The gate reserves starts at least 2,000 ms apart; browser event timestamps are delivered asynchronously. |
+| Repeated ordinary scan | Reused its fresh in-memory listing, **0 extra requests**. |
+| Explicit refresh | Exactly **2** additional filtered listing requests. |
+| Real file | **231,154-byte PDF** saved, expected size and PDF header matched, SHA-256 calculated from saved bytes. Report: 1 completed, 0 failed, 0 not started. |
+| Controls | PDFs, Slides, All files, None, individual selection, 390px connected layout, picker cancellation and disconnect passed. |
+| Credential hygiene | Configured credential values and common credential/private-key markers checked against prospective Git files and reachable Git blobs without displaying values. No matches found. This bounded scan is not proof every possible secret type is absent. |
+
+The live check used an existing authorized service token and Chrome's real origin-private filesystem directory handle. It did not re-exercise normal SSO or native OS picker confirmation. No load test, quiz attempt, external-tool launch, submission or activity-view/completion request was made.
+
+Focused offline failure checks exercise actual policy/adapter logic with controlled inputs, not a fake Moodle server. They prove a 429 stops a three-file batch after its first request, cancels the unread body, leaves the other files not started and blocks another outgoing request during cooldown. They also cover Retry-After seconds/dates, conservative fallbacks, permission/server pauses, persisted-state reuse, lease/queue/pacing cancellation, cache expiry/refresh/identity invalidation and validated partial results without caching an incomplete scan. These failures were not induced on a school; no actual rate limit/account restriction was deliberately triggered. Offline failure behavior is not school-compatibility evidence.
+
+A separate regression rejects the first cooldown-storage write after HTTP429,401,403,500 or599. Each case still makes only one request, cancels the unread body, leaves two files not started, releases the request lease and exposes no underlying storage-error details. Failed persistence is flagged and the user receives a safe manual-retry deadline rather than a false claim the cooldown was saved. This failure hardening was verified offline after the ordinary live path; no extra school requests were needed.
+
+The GitHub workflow runs offline regressions, static checks and the isolated browser check using Node.js 26. It receives no school credentials and never runs the opt-in live test. Actual remote status is shown in GitHub Actions; local success or a workflow definition alone does not establish a remote CI pass.
+
+## Earlier real-profile evidence: November 3, 2026
 
 Course Files for Moodle 0.1.0 is implemented for local Chrome use, not a store-published release. The normal callback connection and actual Windows folder-picker path have now been exercised in the user's real Chrome profile: automatic token capture, enrolled courses, course/file selection, folder permission and a PDF saved to Downloads. This used the existing signed-in Moodle/SSO session, not fresh password entry or MFA. No DevTools or token paste was needed.
 
-Latest successful automated live run: 2026-11-03T05:37:05.884Z (UTC). The native Downloads report was created at 2026-11-03T05:31:16.614Z (UTC).
+Earlier automated live run: 2026-11-03T05:37:05.884Z (UTC). The native Downloads report was created at 2026-11-03T05:31:16.614Z (UTC).
 
-## Executed checks
+## Historical build checks: November 3, 2026
 
 | Check | Actual result |
 | --- | --- |
@@ -31,7 +58,11 @@ The automated test uses Chrome's actual filesystem implementation with an origin
 
 A first detection check ran before the school's document finished rendering and failed. After waiting for the real page to present its Moodle configuration, the production detector passed. No fabricated response was substituted.
 
-## Independent review
+## Request-safety independent review
+
+The bounded pre-push review found one fail-open edge case: a failed cooldown-storage write could mask a known rate-limit error and allow another file request. The correction preserves the classified pause, stops the batch, cancels the unread body and releases the lease even when storage fails. Its regression covers five response statuses and a failed write. A separate final re-review passed with no security concerns, logic errors or suggestions in that corrective delta. These reviews are bounded evidence, not security certification or a guarantee of school acceptance.
+
+## Earlier independent review
 
 Independent reviews identified stale connection cleanup, file/directory prefix collisions and metadata-only root inference defects. All were fixed with regression coverage. The compact UI was independently implemented and browser-checked. The final bounded independent review passed with no security concerns, logic errors or suggestions; all four launcher regressions passed.
 
@@ -40,9 +71,12 @@ Independent reviews identified stale connection cleanup, file/directory prefix c
 - Fresh password entry and MFA were not exercised; normal connection used the existing signed-in browser session.
 - Exercise an actual nested Folder resource and a multi-course download manually. Existing live evidence covers one selected course and one saved File resource.
 - Confirm behavior on another school's Moodle before claiming broad compatibility.
-- Supply publisher identity and a hosted privacy policy, complete store disclosures, and obtain store review. Nothing has been uploaded or published.
+- Supply publisher identity and a hosted privacy policy, complete store disclosures, and obtain Chrome Web Store review. The GitHub source repository is already public and MIT-licensed; there is no Chrome Web Store publication.
+- Conservative pacing cannot guarantee school acceptance, avoid every shared-IP limit or prevent all account/IP restrictions. Use only where permitted.
 
 ## Reproduce
+
+Development requires Node.js 26+. Node and Playwright are not runtime requirements for extension users. Do not repeatedly rerun a failed live check or bypass a recorded cooldown by using a fresh profile.
 
 ```sh
 npm test

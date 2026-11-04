@@ -13,6 +13,9 @@ const tokenA = 'a'.repeat(32), tokenB = 'b'.repeat(32);
 
 async function background(t) {
   const state = {}, removedOrigins = [], requests = [];
+  const localState = {};
+  let clock = Date.now();
+  t.mock.method(Date,'now',()=>clock+=2000);
   let messageListener, captureListener, nextTab = 1;
   const storage = {
     async get(keys) { return structuredClone(Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(key=>key in state).map(key=>[key,state[key]]))); },
@@ -22,7 +25,7 @@ async function background(t) {
   };
   const oldChrome = globalThis.chrome, oldFetch = globalThis.fetch;
   globalThis.chrome = {
-    storage:{session:storage,local:{async set() {}}},
+    storage:{session:storage,local:{async get(key){return {[key]:structuredClone(localState[key])};},async set(values){Object.assign(localState,structuredClone(values));}}},
     permissions:{async contains() { return true; },async remove({origins}) { removedOrigins.push(...origins); }},
     tabs:{async create() { return {id:nextTab++}; },async update() {},async remove() {},onRemoved:{addListener() {}}},
     webRequest:{onHeadersReceived:{addListener(fn) { captureListener=fn; }}},
@@ -32,7 +35,8 @@ async function background(t) {
   globalThis.fetch = async (url,options) => {
     const body = new URLSearchParams(options.body);
     const request = deferred();
-    requests.push({url,body,...request});
+    requests.push({url,body,signal:options.signal,...request});
+    options.signal.addEventListener('abort',()=>request.reject(options.signal.reason),{once:true});
     return request.promise;
   };
   t.after(()=>{ globalThis.chrome=oldChrome; globalThis.fetch=oldFetch; });
@@ -49,7 +53,7 @@ async function background(t) {
     (await request(index)).resolve(Response.json({userid:4,siteurl:site,downloadfiles:1,functions:['core_webservice_get_site_info','core_enrol_get_users_courses','core_course_get_contents'].map(name=>({name}))}));
     (await request(index+1)).resolve(Response.json([]));
   }
-  return {state,removedOrigins,requests,send,request,connect,capture:details=>captureListener(details)};
+  return {state,localState,openedTabs:()=>nextTab-1,removedOrigins,requests,send,request,connect,capture:details=>captureListener(details)};
 }
 
 test('a cancelled token attempt cannot clear a newer ready connection when it rejects',async t=>{
@@ -113,4 +117,23 @@ test('failure cleanup cannot overlap a new attempt between its ownership check a
   assert.equal(overlapped,false,'Connection B began while A still owned cleanup');
   assert.equal(bg.state.connection.token,tokenB);
   assert.equal(bg.state.phase,'ready');
+});
+
+test('a saved school cooldown prevents another browser sign-in launch',async t=>{
+ const bg=await background(t);
+ bg.localState['moodle-request:https://school.example']={status:429,retryAt:Date.now()+300000};
+ const result=await bg.send({type:'connect',site});
+ assert.equal(result.ok,false);assert.match(result.error,/rate limit/i);
+ assert.equal(bg.openedTabs(),0);assert.equal(bg.requests.length,0);
+});
+
+test('cancelling verification aborts the active network request',async t=>{
+ const bg=await background(t);
+ const old=bg.send({type:'token',site,token:tokenA});
+ const request=await bg.request(0);
+ await bg.send({type:'cancel'});
+ const aborted=request.signal.aborted;
+ request.reject(new Error('Stop this offline request'));
+ await old;
+ assert.equal(aborted,true);
 });

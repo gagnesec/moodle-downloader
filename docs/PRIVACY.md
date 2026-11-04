@@ -10,7 +10,9 @@ When you click the extension icon, it may inspect that tab's Moodle configuratio
 
 Normal sign-in occurs on your school's own pages. Those pages may redirect to the school's identity provider and follow that institution's privacy policy. The extension does not ask for or collect your school password. Its optional existing-token input is a troubleshooting fallback, not a password field.
 
-The ordinary Moodle service token and course list are stored in Chrome session storage, unavailable to content scripts. They are cleared on disconnect or browser restart. Any private token received in the Moodle callback is discarded. The Moodle website address alone is remembered locally for reconnection.
+The ordinary Moodle service token and course list are stored in Chrome session storage, unavailable to content scripts. They are cleared on disconnect or browser restart. Any private token received in the Moodle callback is discarded. The Moodle website address is remembered locally for reconnection. Request start times, cooldown expiry and the relevant HTTP status are also stored locally per school origin so a restart or disconnect does not bypass a pause. This timing metadata contains no service token, course contents or downloaded file data and is not synced.
+
+Successful course file listings may be cached in the utility tab's memory for up to five minutes. They are not persisted, and connection changes invalidate them. Explicit refresh checks for new files; no background refresh occurs.
 
 The extension does not sell or transfer your account data or downloaded files to its developer or other third parties.
 
@@ -18,14 +20,14 @@ The extension does not sell or transfer your account data or downloaded files to
 
 - `activeTab`: temporary access to the page where you explicitly click the extension.
 - `scripting`: read that page's canonical Moodle site address for automatic setup. No school-page content is modified.
-- `storage`: hold the session connection and remember the site's address locally.
+- `storage`: hold the session connection and remember the site's address and request timing/cooldown metadata locally.
 - `webRequest`: observe the specific pending Moodle connection callback. The callback must match the expected tab, site, request correlation and expiry.
 - Optional HTTPS website access: requested for the particular Moodle host you choose, not automatically for every website.
 - Folder access: granted separately through Chrome's folder chooser. Existing files are not overwritten.
 
 ## Deletion and control
 
-Disconnect clears the connection and attempts to revoke optional permission for that Moodle host. Uninstalling removes extension-local state. Files and download reports you saved remain in your chosen folder until you delete them. Uninstalling or disconnecting does not revoke the service token at the school's server; manage school-issued tokens through the school's account controls if needed.
+Disconnect clears the connection and attempts to revoke optional permission for that Moodle host. Cooldown metadata is deliberately retained across disconnect. Uninstalling removes extension-local state. Files and download reports you saved remain in your chosen folder until you delete them. Uninstalling or disconnecting does not revoke the service token at the school's server; manage school-issued tokens through the school's account controls if needed.
 
 ## Limits
 

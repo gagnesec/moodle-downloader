@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Course Files for Moodle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Download native File and Folder resources from your selected Moodle courses into organized local folders.",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "webRequest", "activeTab", "scripting"],

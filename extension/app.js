@@ -1,7 +1,10 @@
-import {normalizeSite,fetchContents,collectFiles,downloadFiles,UserError} from './core.js';
+import {normalizeSite,downloadFiles,UserError} from './core.js';
+import {createCourseCache} from './course-cache.js';
+import {RequestPauseError} from './request-policy.js';
 const $ = id => document.getElementById(id);
+const courseCache = createCourseCache();
 const state = {connection:null,files:[],selected:new Set(),busy:'',controller:null,timer:null,targetKey:''};
-const friendly = error => error instanceof UserError ? error.message : 'Something prevented this operation. Check your connection and folder access, then try again.';
+const friendly = error => error instanceof UserError || error instanceof RequestPauseError ? error.message : 'Something prevented this operation. Check your connection and folder access, then try again.';
 const bytes = value => value < 1024 ? `${value} B` : value < 1048576 ? `${(value/1024).toFixed(1)} KB` : value < 1073741824 ? `${(value/1048576).toFixed(1)} MB` : `${(value/1073741824).toFixed(1)} GB`;
 function notice(text='') { $('notice').textContent=text; $('notice').hidden=!text; }
 function showTarget(site,detected=false) {
@@ -17,6 +20,7 @@ function updateCounts() {
   const count=selectedCourses().length;
   $('course-count').textContent=count?`${count} course${count===1?'':'s'} selected`:'Select at least one course.';
   $('scan').disabled=!!state.busy || !count;
+  $('rescan').disabled=!!state.busy || !count;
   const selectedSize=state.files.reduce((total,file)=>total+(state.selected.has(file.key)?file.size:0),0);
   $('selected-count').textContent=`${state.selected.size} file${state.selected.size===1?'':'s'} selected · ${bytes(selectedSize)}`;
   $('download').disabled=!!state.busy || !state.selected.size;
@@ -74,7 +78,8 @@ async function refreshConnection() {
     $('progress-title').textContent=saved.phase==='verifying'?'Checking your Moodle account…':'Finish signing in on your Moodle page…';
   }else if(state.busy==='connection')busy();
   if(saved.error)notice(saved.error);
-  const changed=saved.connection?.token!==state.connection?.token;
+  const changed=saved.connection?.token!==state.connection?.token || saved.connection?.site.base!==state.connection?.site.base || saved.connection?.user.id!==state.connection?.user.id;
+  if(changed){state.controller?.abort();courseCache.clear();}
   state.connection=saved.connection??null;
   $('connect-section').hidden=!!state.connection;
   $('account').hidden=!state.connection;$('course-section').hidden=!state.connection;
@@ -106,28 +111,29 @@ $('connect-token').addEventListener('click',()=>{void connect(true);});
 $('disconnect').addEventListener('click',()=>{void chrome.runtime.sendMessage({type:'disconnect'}).then(()=>{notice();return refreshConnection();});});
 $('course-list').addEventListener('change',()=>{resetFiles();});
 for(const [id,checked] of [['courses-all',true],['courses-none',false]])$(id).addEventListener('click',()=>{for(const input of document.querySelectorAll('#course-list input'))input.checked=checked;resetFiles();});
-$('scan').addEventListener('click',()=>{void (async()=>{
+async function scan(refresh=false){
   const ids=selectedCourses();if(!ids.length||state.busy)return;
   notice();resetFiles();busy('scan');state.controller=new AbortController();
   const warnings=[];
   try{
     for(const [index,id] of ids.entries()){
-      const course=state.connection.courses.find(c=>c.id===id);const sections=[];
+      const course=state.connection.courses.find(c=>c.id===id);
       $('progress-title').textContent=`Finding files · course ${index+1} of ${ids.length}`;
       $('progress-detail').textContent=course.fullname;
-      try{
-        sections.push(...await fetchContents(state.connection,id,'resource',state.controller.signal));
-        await new Promise(resolve=>setTimeout(resolve,150));
-        sections.push(...await fetchContents(state.connection,id,'folder',state.controller.signal));
-      }catch(error){if(state.controller.signal.aborted)throw error;warnings.push(`${course.fullname}: ${friendly(error)}`);}
-      const found=collectFiles(state.connection.site,course,sections);state.files.push(...found.files);
+      const found=await courseCache.get(state.connection,course,state.controller.signal,{refresh});
+      state.files.push(...found.files);
       if(found.skipped.length)warnings.push(`${course.fullname}: ${found.skipped.length} restricted, external, or unsupported item(s) skipped.`);
-      await new Promise(resolve=>setTimeout(resolve,150));
+
     }
     state.selected=new Set(state.files.map(f=>f.key));renderFiles(warnings);
-  }catch(error){resetFiles();if(!state.controller.signal.aborted)notice(friendly(error));else notice('Scan cancelled.');}
+  }catch(error){
+    if(!state.controller.signal.aborted){state.files.push(...(error.partial?.files??[]));state.selected=new Set(state.files.map(f=>f.key));renderFiles(warnings);notice(friendly(error)+' The scan stopped; no automatic retry was made.');}
+    else{resetFiles();notice('Scan cancelled.');}
+  }
   finally{state.controller=null;busy();}
-})();});
+}
+$('scan').addEventListener('click',()=>{void scan();});
+$('rescan').addEventListener('click',()=>{void scan(true);});
 $('file-list').addEventListener('change',event=>{const input=event.target;if(!input.dataset.key)return;if(input.checked)state.selected.add(input.dataset.key);else state.selected.delete(input.dataset.key);updateCounts();});
 for(const [id,predicate] of [['files-all',()=>true],['files-none',()=>false],['files-pdf',file=>/\.pdf$/i.test(file.name)],['files-slides',file=>/\.(pptx?|odp|key)$/i.test(file.name)]])$(id).addEventListener('click',()=>{state.selected=new Set(state.files.filter(predicate).map(f=>f.key));for(const input of document.querySelectorAll('#file-list input'))input.checked=state.selected.has(input.dataset.key);updateCounts();});
 $('download').addEventListener('click',()=>{void (async()=>{
@@ -149,7 +155,12 @@ $('download').addEventListener('click',()=>{void (async()=>{
       $('progress').value=(progress.completed+progress.failed+fraction)/progress.total;
       $('progress-detail').textContent=progress.current?`${progress.current} · ${bytes(progress.bytes)}`:'';
     },state.controller.signal);
-    $('result-summary').textContent=`${result.cancelled?'Stopped. ':''}Saved ${result.completed} of ${result.total} files${result.failed?` · ${result.failed} failed`:''}${result.notStarted?` · ${result.notStarted} not started`:''}`;
+    $('result-summary').textContent=`${result.paused?'Paused. ':result.cancelled?'Stopped. ':''}Saved ${result.completed} of ${result.total} files${result.failed?` · ${result.failed} failed`:''}${result.notStarted?` · ${result.notStarted} not started`:''}`;
+    if(result.paused || result.notStarted || result.cancelled){
+      const saved=new Set(result.files.filter(file=>file.status==='saved').map(file=>file.path));
+      for(const file of files)if(saved.has(file.segments.join('/')))state.selected.delete(file.key);
+      for(const input of document.querySelectorAll('#file-list input'))input.checked=state.selected.has(input.dataset.key);
+    }
     $('result-root').textContent=result.directoryName;$('result-errors').replaceChildren();
     for(const item of result.files.filter(f=>f.status==='failed')){const li=document.createElement('li');li.textContent=`${item.name}: ${item.error}`;$('result-errors').append(li);}
     if(!result.reportWritten){const li=document.createElement('li');li.textContent='The download report could not be written.';$('result-errors').append(li);}

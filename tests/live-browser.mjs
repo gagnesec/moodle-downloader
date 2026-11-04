@@ -21,6 +21,14 @@ const manifest=JSON.parse(await fs.readFile(path.join(extension,'manifest.json')
 manifest.host_permissions=[origin+'/*']; // Test-only pre-grant; no production source changes.
 await fs.writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
 const context=await chromium.launchPersistentContext(path.join(scratch,'profile-'+Date.now()),{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
+const requests=[],active=new Set();let maxConcurrent=0;
+context.on('request',request=>{
+ const url=new URL(request.url());
+ if(url.origin!==origin || !url.pathname.startsWith(new URL(base).pathname+'/webservice/'))return;
+ requests.push({kind:url.pathname.endsWith('/rest/server.php')?'api':'file',startedAt:Date.now()});
+ active.add(request);maxConcurrent=Math.max(maxConcurrent,active.size);
+});
+context.on('requestfinished',request=>active.delete(request));context.on('requestfailed',request=>active.delete(request));
 try{
  const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
  const id=new URL(worker.url()).host;
@@ -54,6 +62,13 @@ try{
  assert.equal(await biology.count(),1,'Expected an enrolled course for the live check');
  await biology.locator('input').check();await page.locator('#scan').click();
  await page.locator('#file-section').waitFor({state:'visible',timeout:60000});
+ const afterScan=requests.length;
+ await page.locator('#scan').click();
+ await page.waitForFunction(()=>document.querySelector('#workspace').getAttribute('aria-busy')==='false');
+ assert.equal(requests.length,afterScan,'A repeated scan should reuse the fresh in-memory course listing');
+ await page.locator('#rescan').click();
+ await page.waitForFunction(()=>document.querySelector('#workspace').getAttribute('aria-busy')==='false',{},{timeout:60000});
+ assert.equal(requests.length,afterScan+2,'An explicit refresh should make exactly two filtered course-list requests');
  await page.locator('#file-options').evaluate(el=>{el.open=true;});
  await page.locator('#files-pdf').click();
  const selectedNames=()=>page.locator('#file-list input:checked').evaluateAll(elements=>elements.map(el=>el.dataset.fileName));
@@ -97,8 +112,12 @@ try{
  assert.equal(verification.report.completed,1,JSON.stringify(verification.report));
  assert.equal(verification.report.failed,0);assert.equal(verification.savedBytes,wanted.size);assert.equal(verification.startsWithPDF,true);assert.deepEqual(errors,[]);
  assert.ok(!JSON.stringify(verification).includes(config.token));
+ assert.equal(requests.length,7,'Expected two account APIs, two File/Folder scan APIs, two explicit refresh APIs, and one file download');
+ assert.equal(maxConcurrent,1,'The real Moodle requests must never overlap');
+ const gaps=requests.slice(1).map((request,index)=>request.startedAt-requests[index].startedAt);
+ assert.ok(gaps.every(gap=>gap>=1900),'Real request starts were not paced: '+JSON.stringify(gaps));
  await page.screenshot({path:path.join(scratch,'live-result.png'),fullPage:true});
- const saved={...verification,downloadedFile:wanted.name,network:'Real Moodle; no intercepted responses',autoDetection:detection,fileSelectionControlsTested:['PDFs','Slides','All files','None','individual checkbox'],connectedNarrowLayoutNoOverflow:true,normalSSOTested:false,nativePickerConfirmationTested:false,testStorage:'Actual Chrome origin-private filesystem',productionSourceUsed:true};
+ const saved={...verification,downloadedFile:wanted.name,network:'Real Moodle; no intercepted responses',requestSafety:{count:requests.length,maxConcurrent,minimumObservedStartGapMs:Math.min(...gaps),repeatScanUsedCache:true,explicitRefreshRequests:2},autoDetection:detection,fileSelectionControlsTested:['PDFs','Slides','All files','None','individual checkbox'],connectedNarrowLayoutNoOverflow:true,normalSSOTested:false,nativePickerConfirmationTested:false,testStorage:'Actual Chrome origin-private filesystem',productionSourceUsed:true};
  await fs.writeFile(path.join(scratch,'live-result.json'),JSON.stringify(saved,null,2));
  console.log(JSON.stringify(saved,null,2));
  await page.locator('#disconnect').click();

@@ -1,3 +1,5 @@
+import {acquireRequest,RequestPauseError} from './request-policy.js';
+
 export class UserError extends Error {
   constructor(code, message) { super(message); this.name = 'UserError'; this.code = code; }
 }
@@ -142,17 +144,20 @@ export function collectFiles(site, course, sections) {
 
 
 const READ_FUNCTIONS = new Set(['core_webservice_get_site_info','core_enrol_get_users_courses','core_course_get_contents']);
-async function callMoodle(site, token, name, params, signal, transport = fetch) {
+async function callMoodle(site, token, name, params, signal, transport = fetch, request = acquireRequest) {
   if (!READ_FUNCTIONS.has(name) || !/^[a-f0-9]{32}$/i.test(token)) throw new UserError('connection','Connect to Moodle again.');
   const canonical = normalizeSite(site.base);
   const body = new URLSearchParams({...params,wstoken:token,wsfunction:name,moodlewsrestformat:'json'});
   let response;
+  const lease = await request(canonical.origin,signal);
   try {
-    response = await transport(canonical.base + '/webservice/rest/server.php',{method:'POST',body,credentials:'omit',redirect:'error',cache:'no-store',signal:signal ? AbortSignal.any([signal,AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000)});
-  } catch (error) {
-    if (signal?.aborted) throw signal.reason;
-    throw new UserError('network','Could not reach Moodle. Check the address and connection, then try again.');
-  }
+    try {
+      response = await transport(canonical.base + '/webservice/rest/server.php',{method:'POST',body,credentials:'omit',redirect:'error',cache:'no-store',signal:signal ? AbortSignal.any([signal,AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000)});
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      throw new UserError('network','Could not reach Moodle. Check the address and connection, then try again.');
+    }
+  await lease.check(response);
   if (!response.ok) throw new UserError('network',`Moodle returned HTTP ${response.status}. Try again later.`);
   let data;
   try { data = await response.json(); } catch { throw new UserError('response','Moodle did not return the expected API response. Check the website address.'); }
@@ -161,27 +166,31 @@ async function callMoodle(site, token, name, params, signal, transport = fetch) 
     throw new UserError('access','Moodle did not allow this request. Your school may restrict mobile/API access.');
   }
   return data;
+  } finally {
+    await response?.body?.cancel().catch(()=>{});
+    lease.release();
+  }
 }
 
-export async function connectWithToken(site, token, transport = fetch) {
+export async function connectWithToken(site, token, transport = fetch, signal, request = acquireRequest) {
   if (!/^[a-f0-9]{32}$/i.test(token)) throw new UserError('token','Use a valid Moodle service token.');
-  const info = await callMoodle(site,token,'core_webservice_get_site_info',{},undefined,transport);
+  const info = await callMoodle(site,token,'core_webservice_get_site_info',{},signal,transport,request);
   if (!info.siteurl || normalizeSite(info.siteurl).base !== site.base || !Number.isSafeInteger(info.userid)) throw new UserError('site','The account response did not match this Moodle address. Use the exact Moodle home address.');
   const functions = new Set((info.functions ?? []).map(f => f.name));
   if (info.downloadfiles !== 1 || [...READ_FUNCTIONS].some(f => !functions.has(f))) throw new UserError('unsupported','This Moodle service does not allow the course-file access this extension needs.');
-  const rows = await callMoodle(site,token,'core_enrol_get_users_courses',{userid:info.userid,returnusercount:'0'},undefined,transport);
+  const rows = await callMoodle(site,token,'core_enrol_get_users_courses',{userid:info.userid,returnusercount:'0'},signal,transport,request);
   if (!Array.isArray(rows)) throw new UserError('response','Moodle did not return a course list.');
   const courses = rows.filter(c => Number.isSafeInteger(c.id) && c.id > 0).map(c => ({id:c.id,shortname:String(c.shortname ?? ''),fullname:String(c.fullname ?? c.shortname ?? 'Course')}));
   return {site,token,user:{id:info.userid,name:String(info.fullname ?? 'Connected account')},courses};
 }
 
-export async function fetchContents(connection, courseId, modname, signal, transport = fetch) {
+export async function fetchContents(connection, courseId, modname, signal, transport = fetch, request = acquireRequest) {
   if (!connection.courses.some(c => c.id === courseId) || !['resource','folder'].includes(modname)) throw new UserError('selection','Choose one of your listed courses.');
   const data = await callMoodle(connection.site,connection.token,'core_course_get_contents',{
     courseid:courseId,'options[0][name]':'modname','options[0][value]':modname,
     'options[1][name]':'excludecontents','options[1][value]':'0',
     'options[2][name]':'includestealthmodules','options[2][value]':'0'
-  },signal,transport);
+  },signal,transport,request);
   if (!Array.isArray(data)) throw new UserError('response','Moodle did not return course file information.');
   return data;
 }
@@ -194,7 +203,7 @@ async function writeJson(directory, name, data) {
   catch (error) { await writer.abort().catch(()=>{}); throw error; }
 }
 
-export async function downloadFiles(connection, files, root, onProgress = () => {}, signal) {
+export async function downloadFiles(connection, files, root, onProgress = () => {}, signal, request = acquireRequest) {
   if (!files.length) throw new UserError('selection','Select files to download.');
   signal?.throwIfAborted();
   for (const file of files) {
@@ -208,20 +217,21 @@ export async function downloadFiles(connection, files, root, onProgress = () => 
   for (let index = 0; index < files.length; index++) {
     if (signal?.aborted) { report.cancelled = true; break; }
     const file = files[index], item = report.files[index];
-    let parent, writer, reader, created = false;
+    let parent, writer, reader, response, lease, created = false;
     const progress = () => onProgress({total:report.total,completed:report.completed,failed:report.failed,current:file.name,bytes:item.bytes,fileSize:file.size,index});
     progress();
     try {
       const url = validateFileUrl(connection.site,file.module,file.content);
-      let response;
+      lease = await request(connection.site.origin,signal);
       try { response = await fetch(url,{method:'POST',body:new URLSearchParams({token:connection.token}),credentials:'omit',redirect:'error',cache:'no-store',signal:signal ? AbortSignal.any([signal,AbortSignal.timeout(600000)]) : AbortSignal.timeout(600000)}); }
-      catch { signal?.throwIfAborted(); throw new UserError('download','The file request failed or redirected. It was not saved.'); }
+      catch { signal?.throwIfAborted(); throw new UserError('network','The file request failed or redirected. The batch stopped; no automatic retry was made.'); }
+      await lease.check(response);
       if (!response.ok || !response.body) throw new UserError('download','Moodle did not permit this file download. Reconnect or rescan the course.');
       const actualType = (response.headers.get('content-type') ?? '').split(';')[0].toLowerCase();
       const expectedType = file.mimetype.toLowerCase();
       if ((actualType === 'text/html' && expectedType !== 'text/html') || (actualType === 'application/json' && expectedType !== 'application/json')) {
         await response.body.cancel();
-        throw new UserError('download','Moodle returned a login or error page instead of this file. Reconnect and rescan.');
+        throw new UserError('connection','Moodle returned a login or error page instead of this file. The batch stopped; check your access before trying again.');
       }
       parent = directory;
       for (const part of file.segments.slice(0,-1)) parent = await parent.getDirectoryHandle(part,{create:true});
@@ -243,13 +253,17 @@ export async function downloadFiles(connection, files, root, onProgress = () => 
       await writer.close(); writer = null;
       item.status = 'saved'; report.completed++;
     } catch (error) {
-      await reader?.cancel().catch(()=>{});
+      await (reader ?? response?.body)?.cancel().catch(()=>{});
       await writer?.abort().catch(()=>{});
       if (created) await parent.removeEntry(file.segments.at(-1)).catch(()=>{});
       if (signal?.aborted || error.name === 'AbortError') { item.status = 'cancelled'; report.cancelled = true; break; }
       item.status = 'failed'; report.failed++;
-      item.error = error instanceof UserError ? error.message : 'This file could not be saved. Check folder access and available disk space.';
+      item.error = error instanceof UserError || error instanceof RequestPauseError ? error.message : 'This file could not be saved. Check folder access and available disk space.';
+      if (error instanceof RequestPauseError) { report.paused = true; report.retryAt = error.retryAt; break; }
+      if (['network','connection'].includes(error.code)) break;
       if (['NotAllowedError','QuotaExceededError'].includes(error.name)) break;
+    } finally {
+      lease?.release();
     }
     progress();
   }

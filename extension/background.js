@@ -1,9 +1,11 @@
 import {normalizeSite,parseCallback,connectWithToken,UserError} from './core.js';
 import {detectSite} from './detect.js';
 import {openDownloader} from './launcher.js';
+import {checkSiteCooldown,RequestPauseError} from './request-policy.js';
 const store = chrome.storage.session;
+const controllers = new Map();
 let handling = '';
-const safeMessage = error => error instanceof UserError ? error.message : 'The connection could not finish. Try again or use an existing Moodle token.';
+const safeMessage = error => error instanceof UserError || error instanceof RequestPauseError ? error.message : 'The connection could not finish. Try again or use an existing Moodle token.';
 let stateChanges = Promise.resolve();
 function serialize(task) {
   const result = stateChanges.then(task);
@@ -17,6 +19,8 @@ function cancelConnection(error = '', keepOrigin = '', attempt) {
 async function clearConnection(error,keepOrigin,attempt) {
   const {pending,connection,activeSite,attempt:currentAttempt} = await store.get(['pending','connection','activeSite','attempt']);
   if (attempt !== undefined && currentAttempt !== attempt) return;
+  controllers.get(currentAttempt)?.abort();
+  controllers.delete(currentAttempt);
   await store.remove(['pending','connection','attempt','activeSite']);
   await store.set({phase:'idle',error});
   if (pending?.tabId) await chrome.tabs.remove(pending.tabId).catch(()=>{});
@@ -24,16 +28,24 @@ async function clearConnection(error,keepOrigin,attempt) {
   if (origin && origin !== keepOrigin) await chrome.permissions.remove({origins:[origin+'/*']}).catch(()=>{});
 }
 async function verify(site,token,attempt) {
-  const connection = await connectWithToken(site,token);
+  const controller = await serialize(async()=>{
+    if ((await store.get('attempt')).attempt !== attempt) return null;
+    const current = new AbortController();controllers.set(attempt,current);return current;
+  });
+  if (!controller) return;
+  try {
+  const connection = await connectWithToken(site,token,fetch,controller.signal);
   await serialize(async()=>{
     if ((await store.get('attempt')).attempt !== attempt) return;
     await store.set({connection,phase:'ready',error:''});
     await chrome.storage.local.set({lastSite:site.base});
     await store.remove(['pending','attempt']);
   });
+  } finally { controllers.delete(attempt); }
 }
 async function start(message,passport) {
   const site = normalizeSite(message.site);
+  await checkSiteCooldown(site.origin);
   await serialize(async()=>{
     if (!await chrome.permissions.contains({origins:[site.origin+'/*']})) throw new UserError('permission','Allow access to this Moodle website first.');
     await clearConnection('',site.origin);
