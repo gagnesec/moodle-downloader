@@ -13,14 +13,14 @@ export function normalizeSite(input) {
   let url;
   try { url = new URL(text); }
   catch { throw new UserError('site', 'That website address is not valid.'); }
-  if (url.protocol !== 'https:' || url.username || url.password || /%2f|%5c|%00/i.test(url.pathname)) {
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname.includes('//') || /%2f|%5c|%00/i.test(url.pathname)) {
     throw new UserError('site', 'Use an HTTPS Moodle address without a username or password.');
   }
-  const knownPage = /\/(?:course\/view\.php|login\/index\.php|my(?:\/index\.php)?|admin\/tool\/mobile\/launch\.php|index\.php)(?:\/)?$/;
+  const knownPage = /\/(?:course\/view\.php|mod\/(?:resource|folder|lti|page|book)\/(?:view|index)\.php|login\/index\.php|my(?:\/index\.php)?|admin\/tool\/mobile\/launch\.php|index\.php)(?:\/)?$/;
   const match = url.pathname.match(knownPage);
   if ((url.search && !match) || [...url.searchParams.keys()].some(key => /^(?:ws)?token$/i.test(key))) throw new UserError('site', 'Paste the Moodle home, dashboard, or course address - not a token link.');
   const pathname = (match ? url.pathname.slice(0, match.index) : url.pathname).replace(/\/+$/, '');
-  if (pathname.split('/').some(part => !part && pathname && part !== pathname.split('/')[0])) {
+  if (/\/[^/]+\.(?:php|html?|pdf)(?:[/-]|$)/i.test(pathname) || pathname.split('/').some(part => !part && pathname && part !== pathname.split('/')[0])) {
     throw new UserError('site', 'Use the exact Moodle website address.');
   }
   return { base: url.origin + pathname, origin: url.origin, path: pathname };

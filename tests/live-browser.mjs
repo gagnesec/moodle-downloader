@@ -41,15 +41,20 @@ try{
  const detection=await page.evaluate(async origin=>{
    const {detectSite}=await import('./detect.js');
    const tabs=await chrome.tabs.query({url:origin+'/*'});
-   for(const tab of tabs){const site=await detectSite(tab);if(site)return {site,tabUrl:tab.url};}
+   for(const tab of tabs){const site=await detectSite(tab);if(site)return {site,tabId:tab.id,tabUrl:tab.url};}
    return null;
  },origin);
  const detectionEvidence=await moodlePage.evaluate(()=>({origin:location.origin,path:location.pathname,title:document.title,moodleRoot:globalThis.M?.cfg?.wwwroot??null,bodyPreview:document.body?.innerText.slice(0,300),htmlLength:document.documentElement.outerHTML.length,contentType:document.contentType}));
  detectionEvidence.status=moodleResponse?.status();
  await fs.writeFile(path.join(scratch,'detection-evidence.json'),JSON.stringify(detectionEvidence,null,2));
  assert.equal(detection?.site.base,base,'Auto-detection did not recognize the real Moodle page: '+JSON.stringify(detectionEvidence));
- await page.evaluate(site=>chrome.storage.session.set({detectedSite:{site,detectedAt:Date.now()}}),detection.site);
+ await page.evaluate(tabId=>chrome.storage.session.set({sourceTabId:tabId}),detection.tabId);
+ assert.equal(await page.locator('#manual-address').evaluate(el=>el.open),false);
+ await page.locator('#connect').click();
  await page.locator('#detected-target').waitFor({state:'visible'});
+ assert.match(await page.locator('#notice').innerText(),/Moodle detected/i);
+ assert.equal(requests.length,0,'Detection retry must not call the Moodle API');
+ assert.equal(await page.locator('#manual-address').evaluate(el=>el.open),false);
  assert.equal(await page.locator('#site').inputValue(),base);
  await moodlePage.close();
  await page.locator('#manual-address').evaluate(el=>{el.open=true;});

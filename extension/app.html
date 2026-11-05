@@ -8,7 +8,8 @@
 <section id="connect-section" aria-labelledby="connect-heading">
  <h2 id="connect-heading">Connect your Moodle</h2>
  <p id="open-moodle-hint">Open your Moodle course or dashboard, then click the extension icon. Your Moodle address is detected for you.</p>
- <div id="detected-target" hidden><p id="detected-note" class="hint">Moodle detected</p><strong id="detected-address"></strong><div class="actions"><button id="connect" type="button">Connect Moodle</button></div></div>
+ <div id="detected-target" hidden><p id="detected-note" class="hint">Moodle detected</p><strong id="detected-address"></strong></div>
+ <div class="actions"><button id="connect" type="button">Connect Moodle</button></div>
  <p class="hint">Sign in on your school's own page. We never ask for your password or monitor unrelated browsing.</p>
  <details id="manual-address"><summary>Use a Moodle address manually</summary><form id="connect-form"><label for="site">Moodle website</label><div class="input-row"><input id="site" type="text" inputmode="url" placeholder="https://your-school.example/moodle" autocomplete="url"><button id="connect-address" type="submit">Connect</button></div></form></details>
  <details id="existing-token"><summary>Connection help: use an existing service token</summary><label for="token">Existing Moodle token, not your password</label><div class="input-row"><input id="token" type="password" autocomplete="off" spellcheck="false" aria-label="Existing Moodle token"><button id="connect-token" class="secondary">Use token</button></div><p class="hint">Only needed if your normal school connection is unavailable. Use the Moodle address shown above or enter it manually.</p></details>

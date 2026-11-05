@@ -42,3 +42,30 @@ test('only a fresh matching Moodle callback yields the ordinary token', async ()
     assert.throws(() => core.parseCallback(callback,pending,time));
   }
 });
+
+test('normalizeSite resolves recognized Moodle activities to their parent installation',()=>{
+ assert.equal(core.normalizeSite('https://moodle.concordia.ca/moodle/mod/lti/view.php?id=4589012').base,'https://moodle.concordia.ca/moodle');
+ for(const prefix of ['', '/moodle', '/nested/moodle']) for(const module of ['resource','folder','lti','page','book']) {
+  const base='https://school.example'+prefix;
+  for(const suffix of ['', '/', '?id=2']) assert.deepEqual(core.normalizeSite(base+'/mod/'+module+'/view.php'+suffix),{base,origin:'https://school.example',path:prefix});
+ }
+});
+test('canonical Moodle roots may contain dots or a directory named mod',()=>{
+ for(const path of ['/moodle4.5','/learning/moodle.v4','/mod','/shared/mod/moodle']){
+  const base='https://school.example'+path;
+  assert.equal(core.normalizeSite(base).base,base);
+  assert.equal(core.normalizeSite(base+'/course/view.php?id=2').base,base);
+ }
+});
+
+test('activity listing addresses resolve to the Moodle root, never the module directory',()=>{
+ const base='https://school.example/moodle';
+ for(const activity of ['resource','folder','lti','page','book']){
+  assert.equal(core.normalizeSite(base+'/mod/'+activity+'/index.php?id=2').base,base);
+ }
+});
+
+test('normalizeSite rejects unknown activities and arbitrary document roots',()=>{
+ const base='https://school.example/moodle';
+ for(const route of ['/mod/quiz/view.php','/mod/unknown/view.php?id=2','/notmod/lti/view.php','/mod/lti-extra/view.php','/mod/lti/view.php-extra','/mod/lti/view.php/extra','/mod/lti/index.php-extra','/news.html','/unknown.php','/mod/lti/view.php?token=secret','/mod/lti/view.php?%77stoken=secret','/mod/lti/view.php?ToKeN=secret','/mod%2flti/view.php?id=2','//mod/lti/view.php?id=2']) assert.throws(()=>core.normalizeSite(base+route),undefined,route);
+});

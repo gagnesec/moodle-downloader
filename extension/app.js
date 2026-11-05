@@ -3,17 +3,23 @@ import {createCourseCache} from './course-cache.js';
 import {RequestPauseError} from './request-policy.js';
 const $ = id => document.getElementById(id);
 const courseCache = createCourseCache();
-const state = {connection:null,files:[],selected:new Set(),busy:'',controller:null,timer:null,targetKey:''};
+const state = {connection:null,files:[],selected:new Set(),busy:'',controller:null,timer:null,targetKey:'',automaticTarget:'',manualSite:false,sourceTabId:undefined};
 const friendly = error => error instanceof UserError || error instanceof RequestPauseError ? error.message : 'Something prevented this operation. Check your connection and folder access, then try again.';
 const bytes = value => value < 1024 ? `${value} B` : value < 1048576 ? `${(value/1024).toFixed(1)} KB` : value < 1073741824 ? `${(value/1048576).toFixed(1)} MB` : `${(value/1073741824).toFixed(1)} GB`;
 function notice(text='') { $('notice').textContent=text; $('notice').hidden=!text; }
 function showTarget(site,detected=false) {
   const key=site.base+':'+detected;
-  if(state.targetKey===key)return;
-  state.targetKey=key;$('site').value=site.base;
+  if(state.targetKey===key || state.manualSite)return;
+  state.targetKey=key;state.automaticTarget=site.base;$('site').value=site.base;
   $('detected-note').textContent=detected?'Moodle detected from your tab':'Your last Moodle site';
   $('detected-address').textContent=site.base;
   $('detected-target').hidden=false;$('open-moodle-hint').hidden=true;
+}
+function clearTarget() {
+  if(state.automaticTarget && $('site').value===state.automaticTarget)$('site').value='';
+  state.automaticTarget='';state.targetKey='';
+  $('detected-address').textContent='';$('detected-note').textContent='';
+  $('detected-target').hidden=true;$('open-moodle-hint').hidden=false;
 }
 function selectedCourses() { return [...document.querySelectorAll('#course-list input:checked')].map(input=>Number(input.value)); }
 function updateCounts() {
@@ -69,7 +75,9 @@ function renderFiles(warnings) {
   $('file-empty').hidden=true;$('file-options').open=true;$('file-section').hidden=false;updateCounts();
 }
 async function refreshConnection() {
-  const saved=await chrome.storage.session.get(['connection','pending','phase','error','detectedSite']);
+  const saved=await chrome.storage.session.get(['connection','pending','phase','error','detectedSite','sourceTabId']);
+  if(saved.sourceTabId!==state.sourceTabId || (!saved.detectedSite?.site && state.targetKey.endsWith(':true')))clearTarget();
+  state.sourceTabId=saved.sourceTabId;
   if(saved.detectedSite?.site && !state.busy)showTarget(saved.detectedSite.site,true);
   clearTimeout(state.timer);
   if(saved.pending){state.timer=setTimeout(()=>{void chrome.runtime.sendMessage({type:'cancel',timeout:true});},Math.max(0,saved.pending.expiresAt-Date.now()));}
@@ -92,6 +100,19 @@ async function refreshConnection() {
 }
 async function connect(useToken=false) {
   notice();
+  if(!useToken && !$('site').value.trim()){
+    busy('detection');$('cancel').disabled=true;$('progress-title').textContent='Checking your Moodle page…';
+    try{
+      const result=await chrome.runtime.sendMessage({type:'detect-site'});
+      if(!result?.ok)throw new UserError('site',result?.error??'Enter your Moodle address below.');
+      showTarget(result.site,true);
+      notice('Moodle detected. Click Connect Moodle to sign in.');
+    }catch{
+      $('manual-address').open=true;
+      notice('Open a Moodle page and click the extension icon again, or enter your Moodle address below.');
+    }finally{busy();if($('manual-address').open && !$('site').value)$('site').focus();}
+    return;
+  }
   try{
     const site=normalizeSite($('site').value);
     const token=$('token').value;
@@ -105,6 +126,7 @@ async function connect(useToken=false) {
     await refreshConnection();
   }catch(error){$('token').value='';busy();notice(friendly(error));}
 }
+$('site').addEventListener('input',()=>{state.targetKey='';state.automaticTarget='';state.manualSite=!!$('site').value.trim();$('detected-target').hidden=true;});
 $('connect-form').addEventListener('submit',event=>{event.preventDefault();void connect();});
 $('connect').addEventListener('click',()=>{void connect();});
 $('connect-token').addEventListener('click',()=>{void connect(true);});
@@ -171,7 +193,7 @@ $('download').addEventListener('click',()=>{void (async()=>{
 $('cancel').addEventListener('click',()=>{if(state.controller)state.controller.abort();else void chrome.runtime.sendMessage({type:'cancel'});});
 $('privacy-open').addEventListener('click',()=>$('privacy').showModal());
 $('privacy-close').addEventListener('click',()=>$('privacy').close());
-chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session' && ['connection','phase','error','pending','detectedSite'].some(key=>key in changes))void refreshConnection();});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session' && ['connection','phase','error','pending','detectedSite','sourceTabId'].some(key=>key in changes))void refreshConnection();});
 window.addEventListener('beforeunload',event=>{if(state.busy==='download'||state.busy==='scan'){event.preventDefault();event.returnValue='';}});
 window.addEventListener('pagehide',()=>state.controller?.abort());
 void (async()=>{const saved=await chrome.storage.local.get('lastSite');if(saved.lastSite){try{showTarget(normalizeSite(saved.lastSite));}catch{}}await refreshConnection();})();

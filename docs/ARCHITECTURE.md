@@ -16,7 +16,7 @@ Course Files is a small Manifest V3 Chrome extension, not a full Moodle backup t
 
 ## Normal data flow
 
-1. The user clicks the toolbar icon on Moodle. Detection reads the current page; it does not fetch course listings.
+1. The user clicks the toolbar icon on Moodle. Detection reads that page's configuration with a bounded readiness wait; it does not fetch course listings. Connect stays visible if detection fails and can retry only that tab, whose ID is kept in session storage. A failed retry opens manual address help. Slow older inspections cannot replace a newer tab's result.
 2. The user grants optional access to that school's HTTPS origin and signs in on the normal school page. The callback must match the pending tab/site/passport and expiry. Its MD5 value is correlation, not a cryptographic signature.
 3. Two fixed API requests validate the account and load its enrolled courses. The token is sent in POST bodies, not download URLs, and kept in Chrome session storage.
 4. The user selects courses. Each uncached course uses two `core_course_get_contents` requests, filtered separately to `resource` and `folder`.

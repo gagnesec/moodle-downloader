@@ -46,6 +46,13 @@ test('discovery keeps colliding original directories separate and their descenda
  }
 });
 
+test('native uploaded video, audio and archives are included without a document-only filter', () => {
+ const names=['lecture.mp4','audio.mp3','materials.zip'];
+ const contents=names.map((name,index)=>file(name,{mimetype:['video/mp4','audio/mpeg','application/zip'][index]}));
+ const result=core.collectFiles(site,{id:5,shortname:'BIO'},[{name:'Week',modules:[{...module,contents}]}]);
+ assert.deepEqual(result.files.map(item=>item.name),names);assert.deepEqual(result.skipped,[]);
+});
+
 test('discovery does not turn other modules, inaccessible resources, or repository aliases into downloads', () => {
  assert.equal(typeof core.collectFiles,'function','Native file discovery is not implemented');
  const sections=[{name:'Week',modules:[{...module,uservisible:false,contents:[file()]},{...module,modname:'quiz',contents:[file()]},{...module,contents:[file('external.pdf',{isexternalfile:true}),file('link',{type:'url'})]}]}];

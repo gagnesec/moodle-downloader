@@ -87,19 +87,50 @@ chrome.tabs.onRemoved.addListener(tabId=>{void (async()=>{
   const {pending}=await store.get('pending');
   if (pending?.tabId===tabId) await cancelConnection('The sign-in tab was closed. Connect again.','',pending.passport);
 })().catch(()=>{});});
+let detectionGeneration = 0;
+async function rememberDetection(tab, generation = ++detectionGeneration) {
+  if (!Number.isInteger(tab?.id) || !tab.url?.startsWith('https://')) return serialize(async()=>{
+    if (generation === detectionGeneration) await store.remove(['sourceTabId','detectedSite']);
+    return null;
+  });
+  const owned = await serialize(async()=>{
+    if (generation !== detectionGeneration) return false;
+    const {sourceTabId}=await store.get('sourceTabId');
+    if (generation !== detectionGeneration) return false;
+    if (sourceTabId !== tab.id) await store.remove('detectedSite');
+    await store.set({sourceTabId:tab.id});
+    return true;
+  });
+  if (!owned) return null;
+  const site = await detectSite(tab);
+  return serialize(async()=>{
+    if (generation !== detectionGeneration) return null;
+    if (site) await store.set({detectedSite:{site,detectedAt:Date.now()}});
+    else await store.remove('detectedSite');
+    return site;
+  });
+}
 chrome.action.onClicked.addListener(tab=>{
   // Opening the utility must not depend on page inspection succeeding.
   void openDownloader(tab).then(()=>chrome.action.setBadgeText({text:''})).catch(()=>{
     void chrome.action.setBadgeText({text:'!'});
     void chrome.action.setTitle({title:'Course Files could not open. Click to try again.'});
   });
-  void detectSite(tab).then(site=>site?store.set({detectedSite:{site,detectedAt:Date.now()}}):undefined).catch(()=>{});
+  void rememberDetection(tab).catch(()=>{});
 });
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
-  if(sender.id!==chrome.runtime.id || !sender.url || new URL(sender.url).pathname!=='/app.html') return false;
-  if(!['connect','token','disconnect','cancel'].includes(message.type))return false;
+  if(sender.id!==chrome.runtime.id || sender.url!==chrome.runtime.getURL('app.html')) return false;
+  if(!['connect','token','disconnect','cancel','detect-site'].includes(message.type))return false;
   const attempt = ['connect','token'].includes(message.type) ? [...crypto.getRandomValues(new Uint8Array(16))].map(n=>n.toString(16).padStart(2,'0')).join('') : undefined;
   void (async()=>{
+    if(message.type==='detect-site'){
+      const generation=++detectionGeneration;
+      const {sourceTabId}=await store.get('sourceTabId');
+      const tab=Number.isInteger(sourceTabId)?await chrome.tabs.get(sourceTabId).catch(()=>null):null;
+      const site=await rememberDetection(tab,generation);
+      if(!site)throw new UserError('site','Open a Moodle page and click the extension icon again, or enter your Moodle address below.');
+      respond({ok:true,site});return;
+    }
     if(['disconnect','cancel'].includes(message.type))await cancelConnection(message.timeout?'Connection timed out. Connect again.':'');
     else await start(message,attempt);
     respond({ok:true});

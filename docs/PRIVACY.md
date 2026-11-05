@@ -6,7 +6,7 @@ Course Files for Moodle is an unofficial browser extension for downloading files
 
 The extension connects directly to the Moodle website you choose. It reads your own account details, enrolled course list and selected course file listings. Selected files stream directly from Moodle into the folder you choose on your computer. There is no developer-operated backend, analytics, advertising, AI service or browser sync of this information.
 
-When you click the extension icon, it may inspect that tab's Moodle configuration to detect the school's website address. It does not continuously inspect browsing history or unrelated tabs.
+When you click the extension icon, it may inspect that tab's Moodle configuration to detect the school's website address. It remembers only that tab's ID in session storage so Connect can retry detection. It does not save the page URL or inspect unrelated tabs or browsing history. Browser restart clears this tab reference.
 
 Normal sign-in occurs on your school's own pages. Those pages may redirect to the school's identity provider and follow that institution's privacy policy. The extension does not ask for or collect your school password. Its optional existing-token input is a troubleshooting fallback, not a password field.
 
